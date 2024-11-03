@@ -1,3 +1,5 @@
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -6,8 +8,12 @@
 #include <sys/wait.h>
 #include <time.h>
 
+
+#define WINDOW_HEIGHT 480
+#define WINDOW_WIDTH 480  
 #define GRID_SIZE 8
-#define SHIP_COUNT 5  // Number of unique ships (1 Battleship, 2 Cruisers, 2 Destroyers)
+#define SHIP_COUNT 5 // Number of unique ships (1 Battleship, 2 Cruisers, 2 Destroyers)
+#define CELL_SIZE (WINDOW_WIDTH / GRID_SIZE)
 
 // Struct to hold game state in shared memory
 typedef struct {
@@ -18,15 +24,41 @@ typedef struct {
     bool parent_turn;
 } GameData;
 
+SDL_Window *window;
+SDL_Renderer *renderer;
+SDL_Texture *battleshipTexture;
+SDL_Texture *destroyerTexture;
+SDL_Texture *cruiserTexture;
+
+
 // Function prototypes
 void generate_maze(char* maze);
 void print_maze(char* maze);
-void shoot(char* target_maze, int* remaining_ships);
+void shoot(char* target_maze, int* remaining_ships,GameData* gameData);
 void sink_ship(char* target_maze, int row, int col, char ship_type);
 void parent_turn(GameData* game_data, int* pipe_fd);
 void child_turn(GameData* game_data, int* pipe_fd);
+void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture* destroyerTexture,SDL_Texture* cruiserTexture,GameData* gameData);
 
-int main() {
+int main(int argc, char *argv[]) {
+    
+     if (SDL_Init(SDL_INIT_VIDEO) < 0 || IMG_Init(IMG_INIT_PNG)<0) {
+        printf("SDL or TTF initialization error: %s\n", SDL_GetError());
+        return 1;
+    }
+
+    window = SDL_CreateWindow("BATTLESHIP", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 640, 480, SDL_WINDOW_SHOWN);
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+
+    battleshipTexture = IMG_LoadTexture(renderer,"battleship.png");
+    destroyerTexture = IMG_LoadTexture(renderer,"destroyer.png");
+    cruiserTexture = IMG_LoadTexture(renderer,"cruiser.png");
+
+    if (!battleshipTexture || !cruiserTexture || !destroyerTexture ) {
+    printf("Failed to load textures: %s\n", IMG_GetError());
+    return 1; // Exit if textures could not be loaded
+}
+
     srand(time(NULL));
 
     // Create shared memory for game data
@@ -55,22 +87,34 @@ int main() {
         perror("pipe failed");
         exit(1);
     }
-
-    while (game_data->parent_remaining_ships > 0 && game_data->child_remaining_ships > 0) {
-        if (game_data->parent_turn) {
-            parent_turn(game_data, pipe_fd);
-        } else {
-            pid_t pid = fork();
-            if (pid == 0) {  // Child process
-                child_turn(game_data, pipe_fd);
-                exit(0);  // Child exits after its turn
-            } else if (pid > 0) {  // Parent process
-                wait(NULL);  // Wait for the child to finish
-                game_data->parent_turn = true;  // Parent's turn after child finishes
-            } else {
-                perror("fork failed");
-                exit(1);
+    
+    SDL_Event event;
+    bool running = true;
+    while (game_data->parent_remaining_ships > 0 && game_data->child_remaining_ships > 0 && running) {
+        while (SDL_PollEvent(&event)){
+            if(event.type == SDL_QUIT){
+                running = false;
             }
+            else{
+                if (game_data->parent_turn) {
+                    drawBoard(renderer,battleshipTexture,destroyerTexture,cruiserTexture,game_data);
+                    parent_turn(game_data, pipe_fd);
+                } 
+                else {
+                    pid_t pid = fork();
+                    if (pid == 0) {  // Child process
+                        child_turn(game_data, pipe_fd);
+                        exit(0);  // Child exits after its turn
+                    } else if (pid > 0) {  // Parent process
+                        wait(NULL);  // Wait for the child to finish
+                        game_data->parent_turn = true;  // Parent's turn after child finishes
+                    } else {
+                        perror("fork failed");
+                        exit(1);
+                    }
+                }
+            }
+          
         }
     }
 
@@ -85,6 +129,13 @@ int main() {
     munmap(game_data, sizeof(GameData));
     close(pipe_fd[0]);
     close(pipe_fd[1]);
+    SDL_DestroyTexture(battleshipTexture);
+    SDL_DestroyTexture(destroyerTexture);
+    SDL_DestroyTexture(cruiserTexture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    IMG_Quit(); // Quit the image subsystem
+    SDL_Quit(); // Quit SDL
     return 0;
 }
 
@@ -156,7 +207,7 @@ void print_maze(char* maze) {
 }
 
 // Simulates a shot on the opponent's grid and sinks the entire ship if a segment is hit
-void shoot(char* target_maze, int* remaining_ships) {
+void shoot(char* target_maze, int* remaining_ships,GameData* gameData) {
     int random_index = rand() % (GRID_SIZE * GRID_SIZE);
     int row = random_index / GRID_SIZE;
     int column = random_index % GRID_SIZE;
@@ -176,6 +227,7 @@ void shoot(char* target_maze, int* remaining_ships) {
     // Print the updated grid to visualize the game state after the shot
     printf("Target Maze After Shooting:\n");
     print_maze(target_maze);
+    //drawBoard(renderer,battleshipTexture,destroyerTexture,cruiserTexture,gameData);
 }
 
 // Helper function to recursively mark all parts of a ship as sunk
@@ -202,7 +254,7 @@ void sink_ship(char* target_maze, int row, int col, char ship_type) {
 // Handles the parent's turn
 void parent_turn(GameData* game_data, int* pipe_fd) {
     printf("\nParent's turn:\n");
-    shoot(game_data->child_maze, &game_data->child_remaining_ships);
+    shoot(game_data->child_maze, &game_data->child_remaining_ships,game_data);
 
     // Delay for 1 second
     sleep(1);
@@ -212,6 +264,7 @@ void parent_turn(GameData* game_data, int* pipe_fd) {
         game_data->parent_turn = false;  // Child's turn next
         write(pipe_fd[1], "go", 2);  // Signal child to play
     }
+    drawBoard(renderer,battleshipTexture,destroyerTexture,cruiserTexture,game_data);
 }
 
 // Handles the child's turn
@@ -219,8 +272,45 @@ void child_turn(GameData* game_data, int* pipe_fd) {
     char buffer[2];
     read(pipe_fd[0], buffer, 2);  // Wait for signal from parent
     printf("\nChild's turn:\n");
-    shoot(game_data->parent_maze, &game_data->parent_remaining_ships);
+    shoot(game_data->parent_maze, &game_data->parent_remaining_ships,game_data);
 
     // Delay for 1 second
     sleep(1);
+}
+
+void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture* destroyerTexture,SDL_Texture* cruiserTexture,GameData* gameData){
+    
+    char* board = gameData->parent_maze; // alias // not really sure about this
+
+    // Clear the screen
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderClear(renderer);
+
+      // Draw grid
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    for (int i = 1; i < GRID_SIZE; i++) {
+        SDL_RenderDrawLine(renderer, i * CELL_SIZE, 0, i * CELL_SIZE, WINDOW_HEIGHT);
+        SDL_RenderDrawLine(renderer, 0, i * CELL_SIZE, WINDOW_WIDTH, i * CELL_SIZE);
+    }
+
+     // Draw ships using textures
+    for (int i = 0; i < GRID_SIZE; i++) {
+        for (int j = 0; j < GRID_SIZE; j++) {
+            if (board[i*GRID_SIZE+j] == 'B') {
+                SDL_Rect dstRect = {j * CELL_SIZE, i * CELL_SIZE, CELL_SIZE, CELL_SIZE};
+                SDL_RenderCopy(renderer, battleShipTexture, NULL, &dstRect); // Draw battleship
+            } else if (board[i*GRID_SIZE+j] == 'C') {
+                SDL_Rect dstRect = {j * CELL_SIZE, i * CELL_SIZE, CELL_SIZE, CELL_SIZE};
+                SDL_RenderCopy(renderer, cruiserTexture, NULL, &dstRect); // Draw cruiser
+            }
+             else if (board[i*GRID_SIZE+j] == 'D') {
+                SDL_Rect dstRect = {j * CELL_SIZE, i * CELL_SIZE, CELL_SIZE, CELL_SIZE};
+                SDL_RenderCopy(renderer, destroyerTexture, NULL, &dstRect); // Draw destroyer
+            }
+        }    
+        
+    }
+
+    // Show the updated screen
+    SDL_RenderPresent(renderer);
 }
