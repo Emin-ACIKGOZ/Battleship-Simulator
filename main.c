@@ -90,6 +90,8 @@ int main(int argc, char *argv[]) {
     
     SDL_Event event;
     bool running = true;
+    
+    /*
     while (game_data->parent_remaining_ships > 0 && game_data->child_remaining_ships > 0 && running) {
         while (SDL_PollEvent(&event)){
             if(event.type == SDL_QUIT){
@@ -99,6 +101,8 @@ int main(int argc, char *argv[]) {
                 if (game_data->parent_turn) {
                     drawBoard(renderer,battleshipTexture,destroyerTexture,cruiserTexture,game_data);
                     parent_turn(game_data, pipe_fd);
+                    drawBoard(renderer,battleshipTexture,destroyerTexture,cruiserTexture,game_data);
+
                 } 
                 else {
                     pid_t pid = fork();
@@ -116,7 +120,37 @@ int main(int argc, char *argv[]) {
             }
           
         }
+    }*/
+
+    while (running) {
+        // Polling SDL events
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT) {
+                running = false;
+            }
+        }
+
+        // Game logic for turn handling
+        if (game_data->parent_turn) {
+            parent_turn(game_data, pipe_fd);
+        } else {
+            pid_t pid = fork();
+            if (pid == 0) {  // Child process
+                child_turn(game_data, pipe_fd);
+                exit(0);
+            } else if (pid > 0) {
+                waitpid(pid, NULL, 0); // Non-blocking wait
+                game_data->parent_turn = true;
+            }
+        }
+
+        // Drawing the board
+        drawBoard(renderer, battleshipTexture, destroyerTexture, cruiserTexture, game_data);
+        
+        // Delay to allow SDL to process events
+        SDL_Delay(16);  // Approximately 60 FPS
     }
+
 
     // Declare winner
     if (game_data->parent_remaining_ships == 0) {
@@ -264,7 +298,7 @@ void parent_turn(GameData* game_data, int* pipe_fd) {
         game_data->parent_turn = false;  // Child's turn next
         write(pipe_fd[1], "go", 2);  // Signal child to play
     }
-    drawBoard(renderer,battleshipTexture,destroyerTexture,cruiserTexture,game_data);
+    //drawBoard(renderer,battleshipTexture,destroyerTexture,cruiserTexture,game_data);
 }
 
 // Handles the child's turn
