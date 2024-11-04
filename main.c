@@ -39,6 +39,7 @@ void sink_ship(char* target_maze, int row, int col, char ship_type);
 void parent_turn(GameData* game_data, int* pipe_fd);
 void child_turn(GameData* game_data, int* pipe_fd);
 void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture* destroyerTexture,SDL_Texture* cruiserTexture,GameData* gameData);
+int winningCondition(GameData* game_data);
 
 int main(int argc, char *argv[]) {
     
@@ -121,7 +122,8 @@ int main(int argc, char *argv[]) {
           
         }
     }*/
-
+    int turn = 0;
+    int condition = 0;
     while (running) {
         // Polling SDL events
         while (SDL_PollEvent(&event)) {
@@ -149,6 +151,14 @@ int main(int argc, char *argv[]) {
         
         // Delay to allow SDL to process events
         SDL_Delay(16);  // Approximately 60 FPS
+
+        turn++;
+        condition = winningCondition(game_data);
+        if (turn>2){
+            if (condition != 0){ // i might need to update this part
+            running = false;
+            } 
+        }
     }
 
 
@@ -310,6 +320,17 @@ void child_turn(GameData* game_data, int* pipe_fd) {
 
     // Delay for 1 second
     sleep(1);
+}
+
+int winningCondition(GameData* game_data){ // 0 if the game continues, 1 if parent wins, 2 if child wins
+    int winningCondition = 0;
+
+    if (game_data->parent_remaining_ships > 0 && game_data->child_remaining_ships == 0)
+        winningCondition = 1;
+    else if (game_data->child_remaining_ships > 0 && game_data->parent_remaining_ships == 0)
+        winningCondition = 2;    
+
+    return winningCondition;    
 }
 
 void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture* destroyerTexture,SDL_Texture* cruiserTexture,GameData* gameData){
