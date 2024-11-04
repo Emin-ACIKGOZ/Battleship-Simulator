@@ -29,6 +29,7 @@ SDL_Renderer *renderer;
 SDL_Texture *battleshipTexture;
 SDL_Texture *destroyerTexture;
 SDL_Texture *cruiserTexture;
+SDL_Texture *explosionTexture;
 
 
 // Function prototypes
@@ -54,7 +55,8 @@ int main(int argc, char *argv[]) {
     battleshipTexture = IMG_LoadTexture(renderer,"battleship.png");
     destroyerTexture = IMG_LoadTexture(renderer,"destroyer.png");
     cruiserTexture = IMG_LoadTexture(renderer,"cruiser.png");
-
+    explosionTexture = IMG_LoadTexture(renderer,"explosion.png");
+    
     if (!battleshipTexture || !cruiserTexture || !destroyerTexture ) {
     printf("Failed to load textures: %s\n", IMG_GetError());
     return 1; // Exit if textures could not be loaded
@@ -367,6 +369,10 @@ void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture
              else if (board[i*GRID_SIZE+j] == 'D') {
                 SDL_Rect dstRect = {j * CELL_SIZE, i * CELL_SIZE, CELL_SIZE, CELL_SIZE};
                 SDL_RenderCopy(renderer, destroyerTexture, NULL, &dstRect); // Draw destroyer
+            }
+            else if (board[i*GRID_SIZE+j] == 'X') {
+                SDL_Rect dstRect = {j * CELL_SIZE, i * CELL_SIZE, CELL_SIZE, CELL_SIZE};
+                SDL_RenderCopy(renderer, explosionTexture, NULL, &dstRect); // Draw destroyer
             }
         }    
         
