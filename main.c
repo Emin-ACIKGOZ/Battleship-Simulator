@@ -344,7 +344,7 @@ void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture
 
 
     // Clear the screen
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_SetRenderDrawColor(renderer, 34, 0, 255, 255);
     SDL_RenderClear(renderer);
 
       // Draw grid
