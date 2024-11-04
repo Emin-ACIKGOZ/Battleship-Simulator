@@ -314,7 +314,13 @@ void child_turn(GameData* game_data, int* pipe_fd) {
 
 void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture* destroyerTexture,SDL_Texture* cruiserTexture,GameData* gameData){
     
-    char* board = gameData->parent_maze; // alias // not really sure about this
+    char* board;
+
+    if (gameData->parent_turn)
+        board = gameData->child_maze; // alias // not really sure about this
+    else
+        board = gameData->parent_maze;
+
 
     // Clear the screen
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
