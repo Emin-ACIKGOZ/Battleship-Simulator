@@ -40,6 +40,7 @@ void sink_ship(char* target_maze, int row, int col, char ship_type);
 void parent_turn(GameData* game_data, int* pipe_fd);
 void child_turn(GameData* game_data, int* pipe_fd);
 void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture* destroyerTexture,SDL_Texture* cruiserTexture,GameData* gameData);
+void fixSunkShips(GameData* game_data);
 int winningCondition(GameData* game_data);
 
 int main(int argc, char *argv[]) {
@@ -93,37 +94,6 @@ int main(int argc, char *argv[]) {
     
     SDL_Event event;
     bool running = true;
-    
-    /*
-    while (game_data->parent_remaining_ships > 0 && game_data->child_remaining_ships > 0 && running) {
-        while (SDL_PollEvent(&event)){
-            if(event.type == SDL_QUIT){
-                running = false;
-            }
-            else{
-                if (game_data->parent_turn) {
-                    drawBoard(renderer,battleshipTexture,destroyerTexture,cruiserTexture,game_data);
-                    parent_turn(game_data, pipe_fd);
-                    drawBoard(renderer,battleshipTexture,destroyerTexture,cruiserTexture,game_data);
-
-                } 
-                else {
-                    pid_t pid = fork();
-                    if (pid == 0) {  // Child process
-                        child_turn(game_data, pipe_fd);
-                        exit(0);  // Child exits after its turn
-                    } else if (pid > 0) {  // Parent process
-                        wait(NULL);  // Wait for the child to finish
-                        game_data->parent_turn = true;  // Parent's turn after child finishes
-                    } else {
-                        perror("fork failed");
-                        exit(1);
-                    }
-                }
-            }
-          
-        }
-    }*/
     int turn = 0;
     int condition = 0;
     while (running) {
@@ -153,6 +123,8 @@ int main(int argc, char *argv[]) {
         
         // Delay to allow SDL to process events
         SDL_Delay(16);  // Approximately 60 FPS
+
+        fixSunkShips(game_data); // Changes sunk ships' to empty spaces
 
         turn++;
         condition = winningCondition(game_data);
@@ -324,6 +296,27 @@ void child_turn(GameData* game_data, int* pipe_fd) {
     sleep(1);
 }
 
+void fixSunkShips(GameData* game_data){
+
+    char* board;
+
+    if (game_data->parent_turn){
+        board = game_data->child_maze; // alias 
+    }
+    else {
+        board = game_data->parent_maze;
+    }
+        
+    for (int i = 0;i<GRID_SIZE;i++){
+        for (int j = 0;j<GRID_SIZE;j++){
+            if (board[i*GRID_SIZE+j] == 'X'){
+                board[i*GRID_SIZE+j] = 'O';
+            }
+                
+        }
+    }
+}
+
 int winningCondition(GameData* game_data){ // 0 if the game continues, 1 if parent wins, 2 if child wins
     int winningCondition = 0;
 
@@ -340,7 +333,7 @@ void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture
     char* board;
 
     if (gameData->parent_turn)
-        board = gameData->child_maze; // alias // not really sure about this
+        board = gameData->child_maze; // alias 
     else
         board = gameData->parent_maze;
 
