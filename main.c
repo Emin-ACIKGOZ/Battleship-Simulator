@@ -52,10 +52,10 @@ int main(int argc, char *argv[]) {
     window = SDL_CreateWindow("BATTLESHIP", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 640, 480, SDL_WINDOW_SHOWN);
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
 
-    battleshipTexture = IMG_LoadTexture(renderer,"battleship.png");
-    destroyerTexture = IMG_LoadTexture(renderer,"destroyer.png");
-    cruiserTexture = IMG_LoadTexture(renderer,"cruiser.png");
-    explosionTexture = IMG_LoadTexture(renderer,"explosion.png");
+    battleshipTexture = IMG_LoadTexture(renderer,"assets/battleship.png");
+    destroyerTexture = IMG_LoadTexture(renderer,"assets/destroyer.png");
+    cruiserTexture = IMG_LoadTexture(renderer,"assets/cruiser.png");
+    explosionTexture = IMG_LoadTexture(renderer,"assets/explosion.png");
     
     if (!battleshipTexture || !cruiserTexture || !destroyerTexture ) {
     printf("Failed to load textures: %s\n", IMG_GetError());
@@ -304,7 +304,7 @@ void parent_turn(GameData* game_data, int* pipe_fd) {
 
     // Delay for 1 second
     sleep(1);
-
+    
     // Check if child has any remaining ships
     if (game_data->child_remaining_ships > 0) {
         game_data->parent_turn = false;  // Child's turn next
