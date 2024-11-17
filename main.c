@@ -19,6 +19,8 @@
 typedef struct {
     char parent_maze[GRID_SIZE * GRID_SIZE];
     char child_maze[GRID_SIZE * GRID_SIZE];
+    char parent_shots[GRID_SIZE * GRID_SIZE];
+    char child_shots[GRID_SIZE * GRID_SIZE];
     int parent_remaining_ships;
     int child_remaining_ships;
     bool parent_turn;
@@ -44,7 +46,7 @@ GameData* game_data_global = NULL;
 // Function prototypes
 void generate_maze(char* maze);
 void print_maze(char* maze);
-void shoot(char* target_maze, int* remaining_ships, GameData* gameData);
+void shoot(char* target_maze, char* shots, int* remaining_ships, GameData* gameData);
 void sink_ship(char* target_maze, int row, int col, char ship_type);
 void parent_turn(GameData* game_data, int* pipe_fd);
 void child_turn(GameData* game_data, int* pipe_fd);
@@ -56,6 +58,14 @@ bool load_game_state(GameData* game_data);
 void setup_autosave(GameData* game_data);
 void handle_interrupt(int signum);
 void save_and_exit(GameData* game_data);
+
+bool is_cell_shot(char* shots, int row, int col) {
+    return shots[row * GRID_SIZE + col] == 1;
+}
+
+void mark_cell_shot(char* shots, int row, int col) {
+    shots[row * GRID_SIZE + col] = 1;
+}
 
 // Function to save game state
 void save_game_state(GameData* game_data) {
@@ -213,12 +223,33 @@ void print_maze(char* maze) {
     }
 }
 
-void shoot(char* target_maze, int* remaining_ships, GameData* gameData) {
-    int random_index = rand() % (GRID_SIZE * GRID_SIZE);
-    int row = random_index / GRID_SIZE;
-    int column = random_index % GRID_SIZE;
+void shoot(char* target_maze, char* shots, int* remaining_ships, GameData* gameData) {
+    int attempts = 0;
+    int max_attempts = GRID_SIZE * GRID_SIZE;
+    bool valid_shot = false;
+    int row, column;
 
-    char cell = target_maze[random_index];
+    while (!valid_shot && attempts < max_attempts) {
+        int random_index = rand() % (GRID_SIZE * GRID_SIZE);
+        row = random_index / GRID_SIZE;
+        column = random_index % GRID_SIZE;
+
+        if (!is_cell_shot(shots, row, column)) {
+            valid_shot = true;
+        }
+        attempts++;
+    }
+
+    if (!valid_shot) {
+        row = rand() % GRID_SIZE;
+        column = rand() % GRID_SIZE;
+    }
+
+    mark_cell_shot(shots, row, column);
+
+    int index = row * GRID_SIZE + column;
+    char cell = target_maze[index];
+
     if (cell == 'B' || cell == 'C' || cell == 'D') {
         printf("Hit! %c-type ship at (%d, %d) starting to sink.\n", cell, row, column);
         sink_ship(target_maze, row, column, cell);
@@ -247,7 +278,7 @@ void sink_ship(char* target_maze, int row, int col, char ship_type) {
 
 void parent_turn(GameData* game_data, int* pipe_fd) {
     printf("\nParent's turn:\n");
-    shoot(game_data->child_maze, &game_data->child_remaining_ships, game_data);
+    shoot(game_data->child_maze, game_data->parent_shots, &game_data->child_remaining_ships, game_data);
     setup_autosave(game_data);
 
     sleep(1);
@@ -258,11 +289,12 @@ void parent_turn(GameData* game_data, int* pipe_fd) {
     }
 }
 
+// 6. child_turn fonksiyonunu güncelle
 void child_turn(GameData* game_data, int* pipe_fd) {
     char buffer[2];
     read(pipe_fd[0], buffer, 2);
     printf("\nChild's turn:\n");
-    shoot(game_data->parent_maze, &game_data->parent_remaining_ships, game_data);
+    shoot(game_data->parent_maze, game_data->child_shots, &game_data->parent_remaining_ships, game_data);
     setup_autosave(game_data);
 
     sleep(1);
@@ -373,14 +405,16 @@ int main(int argc, char *argv[]) {
         signal(SIGINT, handle_interrupt);
 
         // Try to load saved game
-        if (!load_game_state(game_data)) {
-            // Initialize new game if no save exists
-            generate_maze(game_data->parent_maze);
-            generate_maze(game_data->child_maze);
-            game_data->parent_remaining_ships = SHIP_COUNT;
-            game_data->child_remaining_ships = SHIP_COUNT;
-            game_data->parent_turn = true;
-        }
+    if (!load_game_state(game_data)) {
+        // Initialize new game if no save exists
+        generate_maze(game_data->parent_maze);
+        generate_maze(game_data->child_maze);
+        memset(game_data->parent_shots, 0, GRID_SIZE * GRID_SIZE);
+        memset(game_data->child_shots, 0, GRID_SIZE * GRID_SIZE);
+        game_data->parent_remaining_ships = SHIP_COUNT;
+        game_data->child_remaining_ships = SHIP_COUNT;
+        game_data->parent_turn = true;
+    }
 
         // Display initial grids
         printf("Parent's initial grid:\n");
