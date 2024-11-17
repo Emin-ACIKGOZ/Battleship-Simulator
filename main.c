@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <time.h>
+#include <signal.h>
 
 
 #define WINDOW_HEIGHT 480
@@ -24,6 +25,13 @@ typedef struct {
     bool parent_turn;
 } GameData;
 
+// Save game state structure
+typedef struct {
+    GameData game_state;
+    time_t save_time;
+} SaveGame;
+
+// Global variables for SDL
 SDL_Window *window;
 SDL_Renderer *renderer;
 SDL_Texture *battleshipTexture;
@@ -31,21 +39,101 @@ SDL_Texture *destroyerTexture;
 SDL_Texture *cruiserTexture;
 SDL_Texture *explosionTexture;
 
+// Global pointer for signal handler
+GameData* game_data_global = NULL;
 
 // Function prototypes
 void generate_maze(char* maze);
 void print_maze(char* maze);
-void shoot(char* target_maze, int* remaining_ships,GameData* gameData);
+void shoot(char* target_maze, int* remaining_ships, GameData* gameData);
 void sink_ship(char* target_maze, int row, int col, char ship_type);
 void parent_turn(GameData* game_data, int* pipe_fd);
 void child_turn(GameData* game_data, int* pipe_fd);
-void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture* destroyerTexture,SDL_Texture* cruiserTexture,GameData* gameData);
+void drawBoard(SDL_Renderer* renderer, SDL_Texture* battleShipTexture, SDL_Texture* destroyerTexture, SDL_Texture* cruiserTexture, GameData* gameData);
 void fixSunkShips(GameData* game_data);
 int winningCondition(GameData* game_data);
+void save_game_state(GameData* game_data);
+bool load_game_state(GameData* game_data);
+void setup_autosave(GameData* game_data);
+void handle_interrupt(int signum);
+
+// Function to save game state
+void save_game_state(GameData* game_data) {
+    SaveGame save;
+    save.game_state = *game_data;
+    save.save_time = time(NULL);
+    
+    FILE* save_file = fopen("battleship_save.dat", "wb");
+    if (save_file == NULL) {
+        perror("Error opening save file");
+        return;
+    }
+    
+    fwrite(&save, sizeof(SaveGame), 1, save_file);
+    fclose(save_file);
+    printf("Game state saved successfully!\n");
+}
+
+// Function to load game state
+bool load_game_state(GameData* game_data) {
+    SaveGame save;
+    
+    FILE* save_file = fopen("battleship_save.dat", "rb");
+    if (save_file == NULL) {
+        printf("No saved game found.\n");
+        return false;
+    }
+    
+    if (fread(&save, sizeof(SaveGame), 1, save_file) != 1) {
+        printf("Error reading save file.\n");
+        fclose(save_file);
+        return false;
+    }
+    
+    fclose(save_file);
+    
+    // Check if save is older than 24 hours
+    time_t current_time = time(NULL);
+    if (difftime(current_time, save.save_time) > 24 * 60 * 60) {
+        printf("Save file is too old (>24 hours). Starting new game.\n");
+        return false;
+    }
+    
+    *game_data = save.game_state;
+    printf("Game state loaded successfully! (Saved %s)", ctime(&save.save_time));
+    return true;
+}
+
+// Function to handle auto-save timer
+void setup_autosave(GameData* game_data) {
+    static int move_counter = 0;
+    move_counter++;
+    
+    if (move_counter % 5 == 0) {
+        save_game_state(game_data);
+    }
+}
+
+// Signal handler for interrupts
+void handle_interrupt(int signum) {
+    printf("\nGame interrupted. Saving state...\n");
+    save_game_state(game_data_global);
+    
+    // Clean up SDL resources before exit
+    SDL_DestroyTexture(battleshipTexture);
+    SDL_DestroyTexture(destroyerTexture);
+    SDL_DestroyTexture(cruiserTexture);
+    SDL_DestroyTexture(explosionTexture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    IMG_Quit();
+    SDL_Quit();
+    
+    exit(0);
+}
 
 int main(int argc, char *argv[]) {
-    
-     if (SDL_Init(SDL_INIT_VIDEO) < 0 || IMG_Init(IMG_INIT_PNG)<0) {
+    if (SDL_Init(SDL_INIT_VIDEO) < 0 || IMG_Init(IMG_INIT_PNG) < 0) {
         printf("SDL or TTF initialization error: %s\n", SDL_GetError());
         return 1;
     }
@@ -53,15 +141,15 @@ int main(int argc, char *argv[]) {
     window = SDL_CreateWindow("BATTLESHIP", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 640, 480, SDL_WINDOW_SHOWN);
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
 
-    battleshipTexture = IMG_LoadTexture(renderer,"assets/battleship.png");
-    destroyerTexture = IMG_LoadTexture(renderer,"assets/destroyer.png");
-    cruiserTexture = IMG_LoadTexture(renderer,"assets/cruiser.png");
-    explosionTexture = IMG_LoadTexture(renderer,"assets/explosion.png");
+    battleshipTexture = IMG_LoadTexture(renderer, "assets/battleship.png");
+    destroyerTexture = IMG_LoadTexture(renderer, "assets/destroyer.png");
+    cruiserTexture = IMG_LoadTexture(renderer, "assets/cruiser.png");
+    explosionTexture = IMG_LoadTexture(renderer, "assets/explosion.png");
     
-    if (!battleshipTexture || !cruiserTexture || !destroyerTexture ) {
-    printf("Failed to load textures: %s\n", IMG_GetError());
-    return 1; // Exit if textures could not be loaded
-}
+    if (!battleshipTexture || !cruiserTexture || !destroyerTexture) {
+        printf("Failed to load textures: %s\n", IMG_GetError());
+        return 1;
+    }
 
     srand(time(NULL));
 
@@ -72,12 +160,19 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    // Initialize game data
-    generate_maze(game_data->parent_maze);
-    generate_maze(game_data->child_maze);
-    game_data->parent_remaining_ships = SHIP_COUNT;
-    game_data->child_remaining_ships = SHIP_COUNT;
-    game_data->parent_turn = true;  // Parent goes first
+    // Set up signal handler
+    game_data_global = game_data;
+    signal(SIGINT, handle_interrupt);
+
+    // Try to load saved game
+    if (!load_game_state(game_data)) {
+        // Initialize new game if no save exists
+        generate_maze(game_data->parent_maze);
+        generate_maze(game_data->child_maze);
+        game_data->parent_remaining_ships = SHIP_COUNT;
+        game_data->child_remaining_ships = SHIP_COUNT;
+        game_data->parent_turn = true;
+    }
 
     // Display initial grids
     printf("Parent's initial grid:\n");
@@ -97,14 +192,12 @@ int main(int argc, char *argv[]) {
     int turn = 0;
     int condition = 0;
     while (running) {
-        // Polling SDL events
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
                 running = false;
             }
         }
 
-        // Game logic for turn handling
         if (game_data->parent_turn) {
             parent_turn(game_data, pipe_fd);
         } else {
@@ -113,28 +206,24 @@ int main(int argc, char *argv[]) {
                 child_turn(game_data, pipe_fd);
                 exit(0);
             } else if (pid > 0) {
-                waitpid(pid, NULL, 0); // Non-blocking wait
+                waitpid(pid, NULL, 0);
                 game_data->parent_turn = true;
             }
         }
 
-        // Drawing the board
         drawBoard(renderer, battleshipTexture, destroyerTexture, cruiserTexture, game_data);
-        
-        // Delay to allow SDL to process events
-        SDL_Delay(16);  // Approximately 60 FPS
+        SDL_Delay(16);
 
-        fixSunkShips(game_data); // Changes sunk ships' to empty spaces
+        fixSunkShips(game_data);
 
         turn++;
         condition = winningCondition(game_data);
-        if (turn>2){
-            if (condition != 0){ // i might need to update this part
-            running = false;
+        if (turn > 2) {
+            if (condition != 0) {
+                running = false;
             } 
         }
     }
-
 
     // Declare winner
     if (game_data->parent_remaining_ships == 0) {
@@ -152,8 +241,8 @@ int main(int argc, char *argv[]) {
     SDL_DestroyTexture(cruiserTexture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
-    IMG_Quit(); // Quit the image subsystem
-    SDL_Quit(); // Quit SDL
+    IMG_Quit();
+    SDL_Quit();
     return 0;
 }
 
@@ -181,12 +270,11 @@ bool is_valid_placement(char* maze, int index, int length, bool horizontal) {
     return true;
 }
 
-// Place ships on the grid ensuring they have space between them
 void place_ship(char* maze, char ship_type, int length) {
     bool placed = false;
     while (!placed) {
         int index = rand() % (GRID_SIZE * GRID_SIZE);
-        bool horizontal = rand() % 2;  // Random orientation
+        bool horizontal = rand() % 2;
 
         if (is_valid_placement(maze, index, length, horizontal)) {
             for (int i = 0; i < length; i++) {
@@ -199,14 +287,12 @@ void place_ship(char* maze, char ship_type, int length) {
     }
 }
 
-// Generate the maze with varied ships and constraints
 void generate_maze(char* maze) {
     int map_size = GRID_SIZE * GRID_SIZE;
     for (int i = 0; i < map_size; i++) {
         maze[i] = 'O';
     }
 
-    // Place each type of ship
     place_ship(maze, 'B', 4);  // 1 Battleship
     place_ship(maze, 'C', 3);  // 1st Cruiser
     place_ship(maze, 'C', 3);  // 2nd Cruiser
@@ -214,7 +300,6 @@ void generate_maze(char* maze) {
     place_ship(maze, 'D', 2);  // 2nd Destroyer
 }
 
-// Prints the grid
 void print_maze(char* maze) {
     for (int i = 0; i < GRID_SIZE; i++) {
         for (int j = 0; j < GRID_SIZE; j++) {
@@ -224,8 +309,7 @@ void print_maze(char* maze) {
     }
 }
 
-// Simulates a shot on the opponent's grid and sinks the entire ship if a segment is hit
-void shoot(char* target_maze, int* remaining_ships,GameData* gameData) {
+void shoot(char* target_maze, int* remaining_ships, GameData* gameData) {
     int random_index = rand() % (GRID_SIZE * GRID_SIZE);
     int row = random_index / GRID_SIZE;
     int column = random_index % GRID_SIZE;
@@ -233,86 +317,67 @@ void shoot(char* target_maze, int* remaining_ships,GameData* gameData) {
     char cell = target_maze[random_index];
     if (cell == 'B' || cell == 'C' || cell == 'D') {
         printf("Hit! %c-type ship at (%d, %d) starting to sink.\n", cell, row, column);
-
-        // Call sink_ship to recursively mark the entire ship as sunk
         sink_ship(target_maze, row, column, cell);
-
         (*remaining_ships)--;
     } else {
         printf("Missed at (%d, %d).\n", row, column);
     }
 
-    // Print the updated grid to visualize the game state after the shot
     printf("Target Maze After Shooting:\n");
     print_maze(target_maze);
-    //drawBoard(renderer,battleshipTexture,destroyerTexture,cruiserTexture,gameData);
 }
 
-// Helper function to recursively mark all parts of a ship as sunk
 void sink_ship(char* target_maze, int row, int col, char ship_type) {
-    // Check if row and col are within bounds
     if (row < 0 || row >= GRID_SIZE || col < 0 || col >= GRID_SIZE) return;
 
-    // Calculate the index for the 1D array
     int index = row * GRID_SIZE + col;
-
-    // Check if the current cell is part of the ship to be sunk
     if (target_maze[index] != ship_type) return;
 
-    // Mark the current cell as sunk
     target_maze[index] = 'X';
 
-    // Recursively sink all segments of the ship
-    sink_ship(target_maze, row - 1, col, ship_type);  // Up
-    sink_ship(target_maze, row + 1, col, ship_type);  // Down
-    sink_ship(target_maze, row, col - 1, ship_type);  // Left
-    sink_ship(target_maze, row, col + 1, ship_type);  // Right
+    sink_ship(target_maze, row - 1, col, ship_type);
+    sink_ship(target_maze, row + 1, col, ship_type);
+    sink_ship(target_maze, row, col - 1, ship_type);
+    sink_ship(target_maze, row, col + 1, ship_type);
 }
 
-// Handles the parent's turn
 void parent_turn(GameData* game_data, int* pipe_fd) {
     printf("\nParent's turn:\n");
-    shoot(game_data->child_maze, &game_data->child_remaining_ships,game_data);
+    shoot(game_data->child_maze, &game_data->child_remaining_ships, game_data);
+    setup_autosave(game_data);
 
-    // Delay for 1 second
     sleep(1);
     
-    // Check if child has any remaining ships
     if (game_data->child_remaining_ships > 0) {
-        game_data->parent_turn = false;  // Child's turn next
-        write(pipe_fd[1], "go", 2);  // Signal child to play
+        game_data->parent_turn = false;
+        write(pipe_fd[1], "go", 2);
     }
-    //drawBoard(renderer,battleshipTexture,destroyerTexture,cruiserTexture,game_data);
 }
 
-// Handles the child's turn
 void child_turn(GameData* game_data, int* pipe_fd) {
     char buffer[2];
-    read(pipe_fd[0], buffer, 2);  // Wait for signal from parent
+    read(pipe_fd[0], buffer, 2);
     printf("\nChild's turn:\n");
-    shoot(game_data->parent_maze, &game_data->parent_remaining_ships,game_data);
+    shoot(game_data->parent_maze, &game_data->parent_remaining_ships, game_data);
+    setup_autosave(game_data);
 
-    // Delay for 1 second
     sleep(1);
 }
 
-void fixSunkShips(GameData* game_data){
-
+void fixSunkShips(GameData* game_data) {
     char* board;
 
-    if (game_data->parent_turn){
-        board = game_data->child_maze; // alias 
-    }
-    else {
+    if (game_data->parent_turn) {
+        board = game_data->child_maze;
+    } else {
         board = game_data->parent_maze;
     }
         
-    for (int i = 0;i<GRID_SIZE;i++){
-        for (int j = 0;j<GRID_SIZE;j++){
-            if (board[i*GRID_SIZE+j] == 'X'){
-                board[i*GRID_SIZE+j] = 'O';
+    for (int i = 0; i < GRID_SIZE; i++) {
+        for (int j = 0; j < GRID_SIZE; j++) {
+            if (board[i * GRID_SIZE + j] == 'X') {
+                board[i * GRID_SIZE + j] = 'O';
             }
-                
         }
     }
 }
