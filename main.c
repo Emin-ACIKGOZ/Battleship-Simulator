@@ -42,6 +42,7 @@ void child_turn(GameData* game_data, int* pipe_fd);
 void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture* destroyerTexture,SDL_Texture* cruiserTexture,GameData* gameData);
 void fixSunkShips(GameData* game_data);
 int winningCondition(GameData* game_data);
+void loadShipLocations(GameData* game_data, int ar[5][4]);
 
 int main(int argc, char *argv[]) {
     
@@ -150,6 +151,7 @@ int main(int argc, char *argv[]) {
     SDL_DestroyTexture(battleshipTexture);
     SDL_DestroyTexture(destroyerTexture);
     SDL_DestroyTexture(cruiserTexture);
+    SDL_DestroyTexture(explosionTexture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     IMG_Quit(); // Quit the image subsystem
@@ -282,7 +284,7 @@ void parent_turn(GameData* game_data, int* pipe_fd) {
         game_data->parent_turn = false;  // Child's turn next
         write(pipe_fd[1], "go", 2);  // Signal child to play
     }
-    //drawBoard(renderer,battleshipTexture,destroyerTexture,cruiserTexture,game_data);
+    
 }
 
 // Handles the child's turn
@@ -296,8 +298,8 @@ void child_turn(GameData* game_data, int* pipe_fd) {
     sleep(1);
 }
 
-void fixSunkShips(GameData* game_data){
-
+void fixSunkShips(GameData* game_data){ // When a ship sinks, changes its representation to 
+                                        // empty space in the next turn
     char* board;
 
     if (game_data->parent_turn){
@@ -328,6 +330,113 @@ int winningCondition(GameData* game_data){ // 0 if the game continues, 1 if pare
     return winningCondition;    
 }
 
+void loadShipLocations(GameData* game_data, int ar[5][4]){  // really complex function. Some parts are kinda brute force unfortunately. Sorry i couldn't do it better :)                
+    
+    // ar[0] represents location data about battleship
+    // ar[1] represents location data about cruiser 1
+    // ar[2] represents location data about cruiser 2
+    // ar[3] represents location data about destroyer 1
+    // ar[4] represents location data about destroyer 2
+
+    // ar[0][0] represents starting x index
+    // ar[0][1] represents ending x index
+    // ar[0][2] represents starting y index
+    // ar[0][3] represents ending y index
+    
+
+    char* board;
+
+    if (game_data->parent_turn){
+        board = game_data->child_maze; // alias 
+    }
+    else {
+        board = game_data->parent_maze;
+    }
+
+    bool occupied[GRID_SIZE][GRID_SIZE] = {false}; // Checks if a space is occupied by any ships.
+    
+    int C_count = 0; // will help distinguishing cruiser 1 from cruiser 2
+    int D_count = 0; // will help distinguishing destroyer 1 from destroyer 2
+
+    for (int i = 0;i<GRID_SIZE;i++){
+        for (int j = 0;j<GRID_SIZE;j++){
+
+            if (board[i*GRID_SIZE+j] == 'C') 
+                C_count++;
+            else if (board[i*GRID_SIZE+j] == 'D') // counts letters C and D
+                D_count++;
+
+
+            if (board[i*GRID_SIZE+j] == 'O' || occupied[i][j] == true) // don't do anything if the space is empty
+                                                                      //  or the space is already occupied by a ship 
+                continue;
+
+            else{
+                
+                 int shipType = 0; // decide which ship's info will be saved
+
+                    switch(board[i*GRID_SIZE+j]){
+                        case 'B': 
+                        
+                        shipType = 0;
+                        break;
+                        
+                        case 'C': 
+                        
+                        if (C_count<=3){
+                            shipType = 1;
+                        }
+
+                        else{
+                            shipType = 2;
+                        }
+
+                        break;
+                            
+                        case 'D':
+
+                         if (D_count<=2){
+                            shipType = 3;
+                        }
+
+                        else{
+                            shipType = 4;
+                        }
+                        break;
+                    }
+                    
+                int startingX = j;    
+                int endingX = j;
+                int startingY = i;
+                int endingY = i;
+                
+                if (j+1<GRID_SIZE && board[i*GRID_SIZE+j+1] != 'O'){ // this means the board has a horizontal ship shape like "B B..." horizontally
+                    
+                    while (endingX < GRID_SIZE && endingY < GRID_SIZE && endingX + 1 != 'O'){ // checks horizontally;
+                        occupied[i][endingX] = true; // set the checked spaces occupied if a ship exists
+                        endingX++; 
+                    }
+                }
+
+                else if(i+1<GRID_SIZE && board[(i+1)*GRID_SIZE+j] != 'O'){ // this means the board has a vertical ship shape
+                    while (endingX < GRID_SIZE && endingY < GRID_SIZE && endingY + 1 != 'O'){ // checks vertically;
+                        occupied[endingY][j] = true; // set the checked spaces occupied if a ship exists
+                        endingY++; 
+                    }
+                }
+
+                ar[shipType][0] = startingX; // save the data into array
+                ar[shipType][1] = endingX;
+                ar[shipType][2] = startingY;
+                ar[shipType][3] = endingY;
+                
+            }
+
+        }
+    }
+
+}
+
 void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture* destroyerTexture,SDL_Texture* cruiserTexture,GameData* gameData){
     
     char* board;
@@ -349,8 +458,40 @@ void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture
         SDL_RenderDrawLine(renderer, 0, i * CELL_SIZE, WINDOW_WIDTH, i * CELL_SIZE);
     }
 
+    int shipLocations[4][5];
+
+    loadShipLocations(gameData,shipLocations);
+
+    for (int i = 0;i<sizeof(shipLocations)/sizeof(int);i++){
+        SDL_Rect dstRect = {      
+                            (shipLocations[1]-shipLocations[0]+1)*CELL_SIZE,
+                            (shipLocations[3]-shipLocations[2]+1)*CELL_SIZE,
+                            CELL_SIZE,
+                            CELL_SIZE};
+                           
+        switch(i){
+            case 0:
+                SDL_RenderCopy(renderer,battleShipTexture,NULL,&dstRect);
+                break;
+            case 1:
+                
+            case 2:
+                SDL_RenderCopy(renderer,cruiserTexture,NULL,&dstRect);
+                break;
+            case 3:
+                
+            case 4:
+                SDL_RenderCopy(renderer,destroyerTexture,NULL,&dstRect);
+                break;                
+        }
+
+
+    }
+
+
+
      // Draw ships using textures
-    for (int i = 0; i < GRID_SIZE; i++) {
+    /*for (int i = 0; i < GRID_SIZE; i++) {
         for (int j = 0; j < GRID_SIZE; j++) {
             if (board[i*GRID_SIZE+j] == 'B') {
                 SDL_Rect dstRect = {j * CELL_SIZE, i * CELL_SIZE, CELL_SIZE, CELL_SIZE};
@@ -369,7 +510,7 @@ void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture
             }
         }    
         
-    }
+    }*/
 
     // Show the updated screen
     SDL_RenderPresent(renderer);
