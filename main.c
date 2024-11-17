@@ -22,6 +22,8 @@ typedef struct {
     int parent_remaining_ships;
     int child_remaining_ships;
     bool parent_turn;
+    bool parentsShots[GRID_SIZE*GRID_SIZE];
+    bool childsShots[GRID_SIZE*GRID_SIZE];
 } GameData;
 
 // Save game state structure
@@ -215,6 +217,18 @@ void print_maze(char* maze) {
 
 void shoot(char* target_maze, int* remaining_ships, GameData* gameData) {
     int random_index = rand() % (GRID_SIZE * GRID_SIZE);
+
+    if(gameData->parent_turn){
+        while(gameData->parentsShots[random_index] == true){
+            random_index = rand() % (GRID_SIZE * GRID_SIZE);
+        }
+    }
+    else{
+        while(gameData->childsShots[random_index] == true){
+            random_index = rand() % (GRID_SIZE * GRID_SIZE);
+        }
+    }
+
     int row = random_index / GRID_SIZE;
     int column = random_index % GRID_SIZE;
 
@@ -223,6 +237,12 @@ void shoot(char* target_maze, int* remaining_ships, GameData* gameData) {
         printf("Hit! %c-type ship at (%d, %d) starting to sink.\n", cell, row, column);
         sink_ship(target_maze, row, column, cell);
         (*remaining_ships)--;
+         if(gameData->parent_turn){
+            gameData->parentsShots[random_index] = true;
+         }
+         else{
+            gameData->childsShots[random_index] = true;
+         }
     } else {
         printf("Missed at (%d, %d).\n", row, column);
     }
@@ -380,6 +400,11 @@ int main(int argc, char *argv[]) {
             game_data->parent_remaining_ships = SHIP_COUNT;
             game_data->child_remaining_ships = SHIP_COUNT;
             game_data->parent_turn = true;
+
+            for (int i = 0;i<GRID_SIZE*GRID_SIZE;i++){
+                game_data->parentsShots[i] = false;
+                game_data->childsShots[i] = false;
+            }
         }
 
         // Display initial grids
