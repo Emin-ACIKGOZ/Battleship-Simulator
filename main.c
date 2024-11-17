@@ -9,9 +9,8 @@
 #include <time.h>
 #include <signal.h>
 
-
 #define WINDOW_HEIGHT 480
-#define WINDOW_WIDTH 480  
+#define WINDOW_WIDTH 480
 #define GRID_SIZE 8
 #define SHIP_COUNT 5 // Number of unique ships (1 Battleship, 2 Cruisers, 2 Destroyers)
 #define CELL_SIZE (WINDOW_WIDTH / GRID_SIZE)
@@ -56,49 +55,68 @@ void save_game_state(GameData* game_data);
 bool load_game_state(GameData* game_data);
 void setup_autosave(GameData* game_data);
 void handle_interrupt(int signum);
+void save_and_exit(GameData* game_data);
 
 // Function to save game state
 void save_game_state(GameData* game_data) {
     SaveGame save;
     save.game_state = *game_data;
     save.save_time = time(NULL);
-    
+
     FILE* save_file = fopen("battleship_save.dat", "wb");
     if (save_file == NULL) {
         perror("Error opening save file");
         return;
     }
-    
+
     fwrite(&save, sizeof(SaveGame), 1, save_file);
     fclose(save_file);
     printf("Game state saved successfully!\n");
 }
 
+// Function to save and exit game
+void save_and_exit(GameData* game_data) {
+    printf("\nGame saving...\n");
+    save_game_state(game_data);
+
+    // Clean up SDL resources
+    SDL_DestroyTexture(battleshipTexture);
+    SDL_DestroyTexture(destroyerTexture);
+    SDL_DestroyTexture(cruiserTexture);
+    SDL_DestroyTexture(explosionTexture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    IMG_Quit();
+    SDL_Quit();
+
+    exit(0);
+}
+
 // Function to load game state
 bool load_game_state(GameData* game_data) {
     SaveGame save;
-    
+
     FILE* save_file = fopen("battleship_save.dat", "rb");
     if (save_file == NULL) {
         printf("No saved game found.\n");
         return false;
     }
-    
+
     if (fread(&save, sizeof(SaveGame), 1, save_file) != 1) {
         printf("Error reading save file.\n");
         fclose(save_file);
         return false;
     }
-    
+
     fclose(save_file);
-    
+
     // Check if save is older than 24 hours
     time_t current_time = time(NULL);
     if (difftime(current_time, save.save_time) > 24 * 60 * 60) {
         printf("Save file is too old (>24 hours). Starting new game.\n");
         return false;
     }
-    
+
     *game_data = save.game_state;
     printf("Game state loaded successfully! (Saved %s)", ctime(&save.save_time));
     return true;
@@ -108,7 +126,7 @@ bool load_game_state(GameData* game_data) {
 void setup_autosave(GameData* game_data) {
     static int move_counter = 0;
     move_counter++;
-    
+
     if (move_counter % 5 == 0) {
         save_game_state(game_data);
     }
@@ -118,7 +136,7 @@ void setup_autosave(GameData* game_data) {
 void handle_interrupt(int signum) {
     printf("\nGame interrupted. Saving state...\n");
     save_game_state(game_data_global);
-    
+
     // Clean up SDL resources before exit
     SDL_DestroyTexture(battleshipTexture);
     SDL_DestroyTexture(destroyerTexture);
@@ -128,122 +146,8 @@ void handle_interrupt(int signum) {
     SDL_DestroyWindow(window);
     IMG_Quit();
     SDL_Quit();
-    
+
     exit(0);
-}
-
-int main(int argc, char *argv[]) {
-    if (SDL_Init(SDL_INIT_VIDEO) < 0 || IMG_Init(IMG_INIT_PNG) < 0) {
-        printf("SDL or TTF initialization error: %s\n", SDL_GetError());
-        return 1;
-    }
-
-    window = SDL_CreateWindow("BATTLESHIP", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 640, 480, SDL_WINDOW_SHOWN);
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-
-    battleshipTexture = IMG_LoadTexture(renderer, "assets/battleship.png");
-    destroyerTexture = IMG_LoadTexture(renderer, "assets/destroyer.png");
-    cruiserTexture = IMG_LoadTexture(renderer, "assets/cruiser.png");
-    explosionTexture = IMG_LoadTexture(renderer, "assets/explosion.png");
-    
-    if (!battleshipTexture || !cruiserTexture || !destroyerTexture) {
-        printf("Failed to load textures: %s\n", IMG_GetError());
-        return 1;
-    }
-
-    srand(time(NULL));
-
-    // Create shared memory for game data
-    GameData* game_data = mmap(NULL, sizeof(GameData), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (game_data == MAP_FAILED) {
-        perror("mmap failed");
-        exit(1);
-    }
-
-    // Set up signal handler
-    game_data_global = game_data;
-    signal(SIGINT, handle_interrupt);
-
-    // Try to load saved game
-    if (!load_game_state(game_data)) {
-        // Initialize new game if no save exists
-        generate_maze(game_data->parent_maze);
-        generate_maze(game_data->child_maze);
-        game_data->parent_remaining_ships = SHIP_COUNT;
-        game_data->child_remaining_ships = SHIP_COUNT;
-        game_data->parent_turn = true;
-    }
-
-    // Display initial grids
-    printf("Parent's initial grid:\n");
-    print_maze(game_data->parent_maze);
-    printf("Child's initial grid:\n");
-    print_maze(game_data->child_maze);
-
-    // Create pipe for signaling
-    int pipe_fd[2];
-    if (pipe(pipe_fd) == -1) {
-        perror("pipe failed");
-        exit(1);
-    }
-    
-    SDL_Event event;
-    bool running = true;
-    int turn = 0;
-    int condition = 0;
-    while (running) {
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT) {
-                running = false;
-            }
-        }
-
-        if (game_data->parent_turn) {
-            parent_turn(game_data, pipe_fd);
-        } else {
-            pid_t pid = fork();
-            if (pid == 0) {  // Child process
-                child_turn(game_data, pipe_fd);
-                exit(0);
-            } else if (pid > 0) {
-                waitpid(pid, NULL, 0);
-                game_data->parent_turn = true;
-            }
-        }
-
-        drawBoard(renderer, battleshipTexture, destroyerTexture, cruiserTexture, game_data);
-        SDL_Delay(16);
-
-        fixSunkShips(game_data);
-
-        turn++;
-        condition = winningCondition(game_data);
-        if (turn > 2) {
-            if (condition != 0) {
-                running = false;
-            } 
-        }
-    }
-
-    // Declare winner
-    if (game_data->parent_remaining_ships == 0) {
-        printf("Child wins!\n");
-    } else {
-        printf("Parent wins!\n");
-    }
-
-    // Clean up
-    munmap(game_data, sizeof(GameData));
-    close(pipe_fd[0]);
-    close(pipe_fd[1]);
-    SDL_DestroyTexture(battleshipTexture);
-    SDL_DestroyTexture(destroyerTexture);
-    SDL_DestroyTexture(cruiserTexture);
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-    IMG_Quit();
-    SDL_Quit();
-    return 0;
 }
 
 // Function to check if placement is valid (includes gap checks)
@@ -347,7 +251,7 @@ void parent_turn(GameData* game_data, int* pipe_fd) {
     setup_autosave(game_data);
 
     sleep(1);
-    
+
     if (game_data->child_remaining_ships > 0) {
         game_data->parent_turn = false;
         write(pipe_fd[1], "go", 2);
@@ -372,7 +276,7 @@ void fixSunkShips(GameData* game_data) {
     } else {
         board = game_data->parent_maze;
     }
-        
+
     for (int i = 0; i < GRID_SIZE; i++) {
         for (int j = 0; j < GRID_SIZE; j++) {
             if (board[i * GRID_SIZE + j] == 'X') {
@@ -382,60 +286,195 @@ void fixSunkShips(GameData* game_data) {
     }
 }
 
-int winningCondition(GameData* game_data){ // 0 if the game continues, 1 if parent wins, 2 if child wins
+int winningCondition(GameData* game_data) { // 0 if the game continues, 1 if parent wins, 2 if child wins
     int winningCondition = 0;
 
     if (game_data->parent_remaining_ships > 0 && game_data->child_remaining_ships == 0)
         winningCondition = 1;
     else if (game_data->child_remaining_ships > 0 && game_data->parent_remaining_ships == 0)
-        winningCondition = 2;    
+        winningCondition = 2;
 
-    return winningCondition;    
+    return winningCondition;
 }
 
-void drawBoard(SDL_Renderer* renderer,SDL_Texture* battleShipTexture,SDL_Texture* destroyerTexture,SDL_Texture* cruiserTexture,GameData* gameData){
-    
+void drawBoard(SDL_Renderer* renderer, SDL_Texture* battleShipTexture, SDL_Texture* destroyerTexture, SDL_Texture* cruiserTexture, GameData* gameData) {
     char* board;
 
     if (gameData->parent_turn)
-        board = gameData->child_maze; // alias 
+        board = gameData->child_maze;
     else
         board = gameData->parent_maze;
-
 
     // Clear the screen
     SDL_SetRenderDrawColor(renderer, 34, 0, 255, 255);
     SDL_RenderClear(renderer);
 
-      // Draw grid
+    // Draw grid
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     for (int i = 1; i < GRID_SIZE; i++) {
         SDL_RenderDrawLine(renderer, i * CELL_SIZE, 0, i * CELL_SIZE, WINDOW_HEIGHT);
         SDL_RenderDrawLine(renderer, 0, i * CELL_SIZE, WINDOW_WIDTH, i * CELL_SIZE);
     }
 
-     // Draw ships using textures
+    // Draw ships using textures
     for (int i = 0; i < GRID_SIZE; i++) {
         for (int j = 0; j < GRID_SIZE; j++) {
             if (board[i*GRID_SIZE+j] == 'B') {
                 SDL_Rect dstRect = {j * CELL_SIZE, i * CELL_SIZE, CELL_SIZE, CELL_SIZE};
-                SDL_RenderCopy(renderer, battleShipTexture, NULL, &dstRect); // Draw battleship
+                SDL_RenderCopy(renderer, battleShipTexture, NULL, &dstRect);
             } else if (board[i*GRID_SIZE+j] == 'C') {
                 SDL_Rect dstRect = {j * CELL_SIZE, i * CELL_SIZE, CELL_SIZE, CELL_SIZE};
-                SDL_RenderCopy(renderer, cruiserTexture, NULL, &dstRect); // Draw cruiser
-            }
-             else if (board[i*GRID_SIZE+j] == 'D') {
+                SDL_RenderCopy(renderer, cruiserTexture, NULL, &dstRect);
+            } else if (board[i*GRID_SIZE+j] == 'D') {
                 SDL_Rect dstRect = {j * CELL_SIZE, i * CELL_SIZE, CELL_SIZE, CELL_SIZE};
-                SDL_RenderCopy(renderer, destroyerTexture, NULL, &dstRect); // Draw destroyer
-            }
-            else if (board[i*GRID_SIZE+j] == 'X') {
+                SDL_RenderCopy(renderer, destroyerTexture, NULL, &dstRect);
+            } else if (board[i*GRID_SIZE+j] == 'X') {
                 SDL_Rect dstRect = {j * CELL_SIZE, i * CELL_SIZE, CELL_SIZE, CELL_SIZE};
-                SDL_RenderCopy(renderer, explosionTexture, NULL, &dstRect); // Draw destroyer
+                SDL_RenderCopy(renderer, explosionTexture, NULL, &dstRect);
             }
-        }    
-        
+        }
     }
 
     // Show the updated screen
     SDL_RenderPresent(renderer);
 }
+
+
+int main(int argc, char *argv[]) {
+    if (SDL_Init(SDL_INIT_VIDEO) < 0 || IMG_Init(IMG_INIT_PNG) < 0) {
+        printf("SDL or TTF initialization error: %s\n", SDL_GetError());
+        return 1;
+    }
+
+    window = SDL_CreateWindow("BATTLESHIP", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 640, 480, SDL_WINDOW_SHOWN);
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+
+    battleshipTexture = IMG_LoadTexture(renderer, "assets/battleship.png");
+    destroyerTexture = IMG_LoadTexture(renderer, "assets/destroyer.png");
+    cruiserTexture = IMG_LoadTexture(renderer, "assets/cruiser.png");
+    explosionTexture = IMG_LoadTexture(renderer, "assets/explosion.png");
+
+        if (!battleshipTexture || !cruiserTexture || !destroyerTexture) {
+            printf("Failed to load textures: %s\n", IMG_GetError());
+            return 1;
+        }
+
+        srand(time(NULL));
+
+        // Create shared memory for game data
+        GameData* game_data = mmap(NULL, sizeof(GameData), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        if (game_data == MAP_FAILED) {
+            perror("mmap failed");
+            exit(1);
+        }
+
+        // Set up signal handler
+        game_data_global = game_data;
+        signal(SIGINT, handle_interrupt);
+
+        // Try to load saved game
+        if (!load_game_state(game_data)) {
+            // Initialize new game if no save exists
+            generate_maze(game_data->parent_maze);
+            generate_maze(game_data->child_maze);
+            game_data->parent_remaining_ships = SHIP_COUNT;
+            game_data->child_remaining_ships = SHIP_COUNT;
+            game_data->parent_turn = true;
+        }
+
+        // Display initial grids
+        printf("Parent's initial grid:\n");
+        print_maze(game_data->parent_maze);
+        printf("Child's initial grid:\n");
+        print_maze(game_data->child_maze);
+
+        // Create pipe for signaling
+        int pipe_fd[2];
+        if (pipe(pipe_fd) == -1) {
+            perror("pipe failed");
+            exit(1);
+        }
+
+       SDL_Event event;
+           bool running = true;
+           bool is_paused = false;
+           int turn = 0;
+           int condition = 0;
+
+
+    while (running) {
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT) {
+                running = false;
+            } else if (event.type == SDL_KEYDOWN) {
+                printf("Key pressed: %s\n", SDL_GetKeyName(event.key.keysym.sym));
+                switch (event.key.keysym.sym) {
+                    case SDLK_p:
+                        is_paused = !is_paused;
+                        if (is_paused) {
+                            printf("Game paused.\n");
+                        } else {
+                            printf("Game resumed.\n");
+                        }
+                        break;
+                }
+            }
+        }
+
+        if (is_paused) {
+            SDL_Delay(100);  // CPU kullanımını azaltmak için kısa bir bekleme ekliyoruz
+            continue;
+        }
+
+        if (game_data->parent_turn) {
+            parent_turn(game_data, pipe_fd);
+        } else {
+            pid_t pid = fork();
+            if (pid == 0) {  // Child process
+                child_turn(game_data, pipe_fd);
+                exit(0);
+            } else if (pid > 0) {
+                waitpid(pid, NULL, 0);
+                game_data->parent_turn = true;
+            }
+        }
+
+        drawBoard(renderer, battleshipTexture, destroyerTexture, cruiserTexture, game_data);
+        SDL_Delay(16);
+
+        fixSunkShips(game_data);
+
+        turn++;
+        condition = winningCondition(game_data);
+        if (turn > 2) {
+            if (condition != 0) {
+                running = false;
+            }
+        }
+    }
+
+
+        // Declare winner
+        if (game_data->parent_remaining_ships == 0) {
+            printf("Child wins!\n");
+        } else {
+            printf("Parent wins!\n");
+        }
+
+        // Save game state before exiting
+        save_game_state(game_data);
+
+        // Clean up
+        munmap(game_data, sizeof(GameData));
+        close(pipe_fd[0]);
+        close(pipe_fd[1]);
+        SDL_DestroyTexture(battleshipTexture);
+        SDL_DestroyTexture(destroyerTexture);
+        SDL_DestroyTexture(cruiserTexture);
+        SDL_DestroyTexture(explosionTexture);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        IMG_Quit();
+        SDL_Quit();
+        return 0;
+    }
